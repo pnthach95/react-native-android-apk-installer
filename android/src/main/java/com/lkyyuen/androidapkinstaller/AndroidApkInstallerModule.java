@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 
 import androidx.core.content.FileProvider;
 
@@ -23,12 +24,13 @@ public class AndroidApkInstallerModule extends ReactContextBaseJavaModule {
     private final ReactApplicationContext reactContext;
 
     private static final int REQUEST_CODE = 1;
+    private static final int UNKNOWN_RESOURCE_INTENT_REQUEST_CODE = 2;
     private static final String E_INSTALL_CANCELLED = "E_INSTALL_CANCELLED";
 
-    private Promise mPickerPromise;
+    private Promise mPickerPromise = null;
+    private String mFilePath = "";
 
     private final ActivityEventListener mActivityEventListener = new BaseActivityEventListener() {
-
         @Override
         public void onActivityResult(Activity activity, int requestCode, int resultCode, Intent intent) {
             if (requestCode == REQUEST_CODE) {
@@ -44,6 +46,17 @@ public class AndroidApkInstallerModule extends ReactContextBaseJavaModule {
                     }
 
                     mPickerPromise = null;
+                }
+            }
+            if (requestCode == UNKNOWN_RESOURCE_INTENT_REQUEST_CODE) {
+                switch (resultCode) {
+                    case Activity.RESULT_OK:
+                        install(mFilePath, mPickerPromise);
+                        break;
+                    case Activity.RESULT_CANCELED:
+                        //unknown resource installation cancelled
+                        mPickerPromise.reject("400", "User didn't grant permission to install unknown app");
+                        break;
                 }
             }
         }
@@ -62,7 +75,9 @@ public class AndroidApkInstallerModule extends ReactContextBaseJavaModule {
 
     @ReactMethod
     public void install(String filePath, Promise promise) {
-
+        if (mFilePath.isEmpty()) {
+            mFilePath = filePath;
+        }
         Bundle bundle= new Bundle();
 
         Intent intent = new Intent();
@@ -74,10 +89,25 @@ public class AndroidApkInstallerModule extends ReactContextBaseJavaModule {
         Uri apkUri;
 
         // Store the promise to resolve/reject when picker returns data
-        mPickerPromise = promise;
+        if (mPickerPromise == null) {
+            mPickerPromise = promise;
+        }
 
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent unknownSourceIntent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                        .setData(Uri.parse(String.format("package:%s", reactContext.getPackageName())));
+                if (!reactContext.getPackageManager().canRequestPackageInstalls()) {
+                    reactContext.startActivityForResult(unknownSourceIntent, UNKNOWN_RESOURCE_INTENT_REQUEST_CODE, bundle);
+                    return;
+                } else {
+                    intent.putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    String authority = reactContext.getPackageName() + ".fileprovider";
+                    apkUri = FileProvider.getUriForFile(reactContext, authority, apkFile);
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 String authority = reactContext.getPackageName() + ".fileprovider";
                 apkUri = FileProvider.getUriForFile(reactContext, authority, apkFile);
@@ -86,7 +116,6 @@ public class AndroidApkInstallerModule extends ReactContextBaseJavaModule {
             }
             intent.setDataAndType(apkUri, "application/vnd.android.package-archive");
             reactContext.startActivityForResult(intent, REQUEST_CODE, bundle);
-
         } catch (Exception e) {
             mPickerPromise.reject(e);
             mPickerPromise = null;
