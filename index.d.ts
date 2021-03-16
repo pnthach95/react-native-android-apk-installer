@@ -1,7 +1,7 @@
 declare module 'react-native-android-apk-installer' {
 
     const AndroidApkInstaller: {
-        install: () => Promise<string>;
+        install: (filePath: string) => Promise<string>;
     };
 
     export = AndroidApkInstaller;
